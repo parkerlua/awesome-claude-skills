@@ -1,0 +1,178 @@
+---
+name: typescript
+description: Write strict, well-typed TypeScript. Use when working in TypeScript codebases, designing types, or fixing type errors.
+---
+
+You are writing TypeScript. The goal of types is to make bugs impossible at compile time, not to satisfy the compiler with the minimum effort. Use types to encode real constraints about your domain.
+
+## Strictness First
+
+Always use strict mode. In `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,           // enables all strict checks
+    "noUncheckedIndexedAccess": true,  // arr[0] is T | undefined, not T
+    "exactOptionalPropertyTypes": true, // { a?: string } ≠ { a: string | undefined }
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}
+```
+
+Never use `// @ts-ignore` or `// @ts-nocheck`. Fix the type error properly.
+
+## Type Design
+
+### Prefer specific types over broad ones
+
+```typescript
+// 🚨 Too broad — accepts anything
+function process(data: any) {}
+function process(data: object) {}
+function process(id: string) {} // is it a UUID? a slug? an email?
+
+// ✅ Specific and self-documenting
+function process(data: UserRecord) {}
+type UserId = string & { readonly __brand: 'UserId' }
+function getUser(id: UserId) {}
+```
+
+### Use union types to model real states
+
+```typescript
+// 🚨 Allows impossible states — what if loading=true and error is set?
+interface State {
+  loading: boolean
+  data: User | null
+  error: Error | null
+}
+
+// ✅ Only valid states are representable
+type State =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: User }
+  | { status: 'error'; error: Error }
+```
+
+### Use `unknown` instead of `any` for truly unknown data
+
+```typescript
+// 🚨 any bypasses all type checking
+function parseConfig(raw: any) {
+  return raw.port // no error even if port doesn't exist
+}
+
+// ✅ unknown forces you to validate before using
+function parseConfig(raw: unknown): Config {
+  if (!isConfig(raw)) throw new Error('Invalid config')
+  return raw // now narrowed to Config
+}
+```
+
+### Narrow types explicitly
+
+```typescript
+// Type guards
+function isUser(value: unknown): value is User {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'email' in value
+  )
+}
+
+// Discriminated unions (prefer over type guards when possible)
+function handleState(state: State) {
+  switch (state.status) {
+    case 'loading': return <Spinner />
+    case 'success': return <UserCard user={state.data} /> // data is User here
+    case 'error': return <Error message={state.error.message} />
+  }
+}
+```
+
+## Common Patterns
+
+### Generic functions
+
+```typescript
+// ✅ Generic preserves the specific type
+function first<T>(arr: T[]): T | undefined {
+  return arr[0]
+}
+
+const name = first(['alice', 'bob']) // string | undefined, not any
+```
+
+### Utility types
+
+```typescript
+// Use built-in utility types
+type UserPreview = Pick<User, 'id' | 'name' | 'avatar'>
+type UserUpdate = Partial<Pick<User, 'name' | 'email' | 'bio'>>
+type ReadonlyUser = Readonly<User>
+
+// Derive types from runtime values — single source of truth
+const ROLES = ['admin', 'editor', 'viewer'] as const
+type Role = typeof ROLES[number] // 'admin' | 'editor' | 'viewer'
+
+const config = { port: 3000, host: 'localhost' } as const
+type Config = typeof config
+```
+
+### Async types
+
+```typescript
+// Always type Promise results
+async function fetchUser(id: string): Promise<User> { ... }
+
+// Use Result type for operations that can fail
+type Result<T, E = Error> =
+  | { ok: true; value: T }
+  | { ok: false; error: E }
+
+async function safeParseJson(text: string): Promise<Result<unknown>> {
+  try {
+    return { ok: true, value: JSON.parse(text) }
+  } catch (e) {
+    return { ok: false, error: e as Error }
+  }
+}
+```
+
+## What NOT to Do
+
+```typescript
+// ❌ Casting instead of fixing
+const user = response as User         // doesn't validate, just lies to compiler
+const el = document.getElementById('app') as HTMLDivElement // crashes if null
+
+// ✅ Validate or handle null properly
+const el = document.getElementById('app')
+if (!(el instanceof HTMLDivElement)) throw new Error('Missing #app element')
+
+// ❌ Unnecessary non-null assertion
+const name = user!.profile!.name  // crashes at runtime if any are null
+
+// ✅ Handle nullability
+const name = user?.profile?.name ?? 'Anonymous'
+
+// ❌ Enums (they compile to unexpected JS)
+enum Direction { Up, Down }
+
+// ✅ Const object or union type
+const Direction = { Up: 'up', Down: 'down' } as const
+type Direction = typeof Direction[keyof typeof Direction]
+```
+
+## Type Error Fixes
+
+When you see a type error:
+1. Read the full error message — TypeScript tells you exactly what's wrong
+2. Don't cast to `any` — understand why the types don't match
+3. The error is usually at the call site, but the fix is often in the type definition
+4. If two things should be the same type, make them share a type definition
